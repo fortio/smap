@@ -905,6 +905,20 @@ func TestKeysSnapshot(t *testing.T) {
 	if len(oldKeys) != 3 {
 		t.Errorf("Snapshot should be independent of map changes, expected 3 keys, got %d", len(oldKeys))
 	}
+	// Check KeysValuesSnapshot as well
+	kvPairs := m.KeysValuesSnapshot()
+	if len(kvPairs) != 3 {
+		t.Errorf("Expected 3 key-value pairs in snapshot, got %d", len(kvPairs))
+	}
+	for _, kv := range kvPairs {
+		if kv.Key == "foo" {
+			t.Errorf("Snapshot should contain old key 'foo', but it was deleted from map")
+		}
+		mval, ok := m.Get(kv.Key)
+		if !ok || mval != kv.Value {
+			t.Errorf("Snapshot key-value pair mismatch for key %s: expected %d, got %d", kv.Key, kv.Value, mval)
+		}
+	}
 }
 
 func TestTransfer(t *testing.T) {
@@ -1255,6 +1269,43 @@ func TestCloneVersionTracking(t *testing.T) {
 	}
 }
 
+func TestString(t *testing.T) {
+	m := New[string, int]()
+	m.Set("cherry", 8)
+	m.Set("apple", 5)
+	m.Set("banana", -3)
+	// somehow the %v order is deterministic here
+	expected := "map[apple:5 banana:-3 cherry:8]"
+	actual := m.String()
+	if actual != expected {
+		t.Errorf("Expected String() to be %q, got %q", expected, actual)
+	}
+	actual2 := fmt.Sprintf("%v", m)
+	if actual2 != expected {
+		t.Errorf("Expected fmt %%v to be %q, got %q", expected, actual2)
+	}
+	actual3 := fmt.Sprintf("%s", m) //nolint:staticcheck // testing Stringer in fmt.
+	if actual3 != expected {
+		t.Errorf("Expected fmt %%s to be %q, got %q", expected, actual3)
+	}
+	// GoString
+	expectedDebug := `*smap.Map[string,int](map[string]int{"apple":5, "banana":-3, "cherry":8})`
+	actualDebug := m.GoString()
+	if actualDebug != expectedDebug {
+		t.Errorf("Expected GoString() to be %q, got %q", expectedDebug, actualDebug)
+	}
+
+	actualDebug2 := fmt.Sprintf("%#v", m)
+	if actualDebug2 != expectedDebug {
+		t.Errorf("Expected fmt %%#v to be %q, got %q", expectedDebug, actualDebug2)
+	}
+	// also %+#v
+	actualDebug3 := fmt.Sprintf("%+#v", m)
+	if actualDebug3 != expectedDebug {
+		t.Errorf("Expected fmt %%+#v to be %q, got %q", expectedDebug, actualDebug3)
+	}
+}
+
 // Example demonstrates basic usage of the concurrent safe Map
 // including creating, setting, getting, and iterating with All().
 // The whole point though would be do to these operations concurrently from multiple goroutines.
@@ -1283,7 +1334,7 @@ func Example() {
 	// Note: We collect and sort for deterministic output in this example
 	var toDelete []string
 	// Using m.All you can't mutate the map during iteration (use AllSorted or collect changes first, or
-	// use KeysSnapshot or KeyValuesSnapshot first then mutate)
+	// use KeysSnapshot or KeysValuesSnapshot first then mutate)
 	for fruit, count := range m.All() {
 		if count < 8 {
 			toDelete = append(toDelete, fruit)
@@ -1291,12 +1342,14 @@ func Example() {
 	}
 	m.Delete(toDelete...) // Delete multiple, after iteration
 	fmt.Printf("After removing items with count < 8, total items: %d\n", m.Len())
+	fmt.Printf("Map is now just %v\n", m)
 
 	// Output:
 	// Bananas: 3
 	// Total items: 3
 	// Has apple: true
 	// After removing items with count < 8, total items: 1
+	// Map is now just map[cherry:8]
 }
 
 // ExampleMap_AllSorted demonstrates using AllSorted with a custom struct

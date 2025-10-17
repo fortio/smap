@@ -7,6 +7,7 @@ package smap
 
 import (
 	"cmp"
+	"fmt"
 	"iter"
 	"maps"
 	"sort"
@@ -170,9 +171,9 @@ func (s *Map[K, V]) KeysSnapshot() []K {
 	return keys
 }
 
-// KeyValuesSnapshot returns a snapshot slice of the current key-value pairs in the map.
+// KeysValuesSnapshot returns a snapshot slice of the current key-value pairs in the map.
 // The snapshot is taken under a read lock.
-func (s *Map[K, V]) KeyValuesSnapshot() []KV[K, V] {
+func (s *Map[K, V]) KeysValuesSnapshot() []KV[K, V] {
 	s.mu.RLock()
 	kvs := make([]KV[K, V], 0, len(s.m))
 	for k, v := range s.m {
@@ -271,6 +272,22 @@ func (s *Map[K, V]) Copy(src *Map[K, V]) (newVersion uint64) {
 	src.mu.RUnlock()
 	s.mu.Unlock()
 	return newVersion
+}
+
+// String() returns a string representation of the map for debugging purposes (%s/%v).
+func (s *Map[K, V]) String() (debug string) {
+	s.mu.RLock()
+	debug = fmt.Sprintf("%v", s.m)
+	s.mu.RUnlock()
+	return debug
+}
+
+// GoString() returns a string representation of the map for debugging purposes (%#v).
+func (s *Map[K, V]) GoString() (debug string) {
+	s.mu.RLock()
+	debug = fmt.Sprintf("%T(%#v)", s, s.m)
+	s.mu.RUnlock()
+	return debug
 }
 
 // NaturalSort returns an iterator that visits key-value pairs in the natural order of Q (using <).
