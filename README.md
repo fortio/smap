@@ -8,3 +8,6 @@ Concurrent Safe Generic golang map with optionally sorted iteration (provides go
 Zero dependencies.
 
 See https://pkg.go.dev/fortio.org/smap
+
+## History
+This was originally developed for [fortio.org/tsync](https://github.com/fortio/tsync#tsync) which uses and battle tests it including for race conditions (there aren't any!).
