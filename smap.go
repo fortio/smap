@@ -1,5 +1,8 @@
 // Package smap is a zero dependencies library that provides a generic, concurrent safe map
 // with go1.24 iterators including optionally ordered keys iteration.
+//
+// This was originally developed for [fortio.org/tsync](https://github.com/fortio/tsync#tsync)
+// which uses and battle tests it including for race conditions (there aren't any!).
 package smap
 
 import (
