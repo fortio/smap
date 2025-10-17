@@ -1,6 +1,7 @@
 package smap
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 )
@@ -700,16 +701,16 @@ func TestVersion(t *testing.T) {
 	}
 }
 
-func TestMultiSet(t *testing.T) {
+func TestSetBatch(t *testing.T) {
 	m := New[string, int]()
 	kvs := []KV[string, int]{
 		{"x", 10},
 		{"y", 20},
 		{"z", 30},
 	}
-	m.MultiSet(kvs)
+	m.SetBatch(kvs)
 	if m.Len() != 3 {
-		t.Errorf("Expected 3 entries after MultiSet, got %d", m.Len())
+		t.Errorf("Expected 3 entries after SetBatch, got %d", m.Len())
 	}
 	for _, kv := range kvs {
 		v, ok := m.Get(kv.Key)
@@ -866,4 +867,498 @@ func TestAllNaturalSort(t *testing.T) { //nolint:gocognit // it's a test!
 			t.Fatalf("expected to stop after 1 iteration when yield returns false, got %d", calls)
 		}
 	})
+}
+
+func TestKeysSnapshot(t *testing.T) {
+	m := New[string, int]()
+
+	// Test empty map
+	keys := m.KeysSnapshot()
+	if len(keys) != 0 {
+		t.Errorf("Expected empty snapshot, got %d keys", len(keys))
+	}
+
+	// Test with data
+	m.Set("foo", 1)
+	m.Set("bar", 2)
+	m.Set("baz", 3)
+
+	keys = m.KeysSnapshot()
+	if len(keys) != 3 {
+		t.Errorf("Expected 3 keys in snapshot, got %d", len(keys))
+	}
+
+	// Verify all keys are present
+	keyMap := make(map[string]bool)
+	for _, k := range keys {
+		keyMap[k] = true
+	}
+	if !keyMap["foo"] || !keyMap["bar"] || !keyMap["baz"] {
+		t.Errorf("Expected all keys to be in snapshot, got %v", keys)
+	}
+
+	// Verify snapshot is independent - modifying original map shouldn't affect snapshot
+	oldKeys := m.KeysSnapshot()
+	m.Set("qux", 4)
+	m.Delete("foo")
+
+	if len(oldKeys) != 3 {
+		t.Errorf("Snapshot should be independent of map changes, expected 3 keys, got %d", len(oldKeys))
+	}
+}
+
+func TestTransfer(t *testing.T) {
+	// Create a regular map
+	regularMap := map[string]int{
+		"foo": 1,
+		"bar": 2,
+		"baz": 3,
+	}
+
+	// Transfer ownership to sync Map
+	m := Transfer(regularMap)
+
+	// Verify contents
+	if m.Len() != 3 {
+		t.Errorf("Expected 3 entries after transfer, got %d", m.Len())
+	}
+
+	val, ok := m.Get("foo")
+	if !ok || val != 1 {
+		t.Errorf("Expected foo=1, got %d (ok=%v)", val, ok)
+	}
+
+	val, ok = m.Get("bar")
+	if !ok || val != 2 {
+		t.Errorf("Expected bar=2, got %d (ok=%v)", val, ok)
+	}
+
+	// Verify version starts at 0
+	if m.Version() != 0 {
+		t.Errorf("Expected initial version to be 0, got %d", m.Version())
+	}
+
+	// Modify and check version increments
+	m.Set("qux", 4)
+	if m.Version() != 1 {
+		t.Errorf("Expected version 1 after modification, got %d", m.Version())
+	}
+}
+
+func TestFromMap(t *testing.T) {
+	// Create a regular map
+	regularMap := map[string]int{
+		"foo": 1,
+		"bar": 2,
+		"baz": 3,
+	}
+
+	// Clone into sync Map
+	m := FromMap(regularMap)
+
+	// Verify contents
+	if m.Len() != 3 {
+		t.Errorf("Expected 3 entries from map, got %d", m.Len())
+	}
+
+	val, ok := m.Get("foo")
+	if !ok || val != 1 {
+		t.Errorf("Expected foo=1, got %d (ok=%v)", val, ok)
+	}
+
+	// Verify it's a clone - modifying original shouldn't affect sync Map
+	regularMap["qux"] = 4
+	if m.Has("qux") {
+		t.Error("FromMap should clone, not reference original map")
+	}
+
+	// Modifying sync Map shouldn't affect original
+	m.Set("extra", 99)
+	if _, exists := regularMap["extra"]; exists {
+		t.Error("Modifying sync Map should not affect original map")
+	}
+
+	// Test with empty map
+	emptyMap := map[string]int{}
+	m2 := FromMap(emptyMap)
+	if m2.Len() != 0 {
+		t.Errorf("Expected empty map, got %d entries", m2.Len())
+	}
+
+	// Test with nil map (should work but be empty)
+	var nilMap map[string]int
+	m3 := FromMap(nilMap)
+	if m3.Len() != 0 {
+		t.Errorf("Expected empty map from nil map, got %d entries", m3.Len())
+	}
+}
+
+func TestClone(t *testing.T) {
+	// Create and populate original map
+	m := New[string, int]()
+	m.Set("foo", 1)
+	m.Set("bar", 2)
+	m.Set("baz", 3)
+
+	// Clone it
+	clone := m.Clone()
+
+	// Verify clone has same contents
+	if clone.Len() != m.Len() {
+		t.Errorf("Clone should have same length as original: expected %d, got %d", m.Len(), clone.Len())
+	}
+
+	for k, v := range m.All() {
+		cloneVal, ok := clone.Get(k)
+		if !ok {
+			t.Errorf("Clone missing key %s", k)
+		}
+		if cloneVal != v {
+			t.Errorf("Clone has wrong value for %s: expected %d, got %d", k, v, cloneVal)
+		}
+	}
+
+	// Verify version is copied
+	if clone.Version() != m.Version() {
+		t.Errorf("Clone should have same version as original: expected %d, got %d", m.Version(), clone.Version())
+	}
+
+	// Verify it's a true clone - modifying original shouldn't affect clone
+	m.Set("qux", 4)
+	if clone.Has("qux") {
+		t.Error("Clone should be independent - original modification affected clone")
+	}
+
+	// Modifying clone shouldn't affect original
+	clone.Set("extra", 99)
+	if m.Has("extra") {
+		t.Error("Clone should be independent - clone modification affected original")
+	}
+
+	// Verify versions are independent (both should have incremented by 1 from the clone point)
+	// After clone at v3: original did 1 set (v4), clone did 1 set (v4)
+	// They happen to be the same value but are independently tracked
+	originalVersion := m.Version()
+	cloneVersion := clone.Version()
+	if originalVersion != 4 || cloneVersion != 4 {
+		t.Errorf("Expected both to be version 4, got original=%d, clone=%d", originalVersion, cloneVersion)
+	}
+
+	// Do different numbers of operations to show independence
+	m.Set("alpha", 10)
+	m.Set("beta", 20)     // original now at v6
+	clone.Delete("extra") // clone now at v5
+
+	if m.Version() == clone.Version() {
+		t.Error("After different numbers of operations, versions should differ")
+	}
+	if m.Version() != 6 {
+		t.Errorf("Original should be at version 6, got %d", m.Version())
+	}
+	if clone.Version() != 5 {
+		t.Errorf("Clone should be at version 5, got %d", clone.Version())
+	}
+
+	// Test cloning empty map
+	emptyMap := New[string, int]()
+	emptyClone := emptyMap.Clone()
+	if emptyClone.Len() != 0 {
+		t.Errorf("Clone of empty map should be empty, got %d entries", emptyClone.Len())
+	}
+}
+
+func TestCopy(t *testing.T) {
+	// Create source map
+	src := New[string, int]()
+	src.Set("foo", 1)
+	src.Set("bar", 2)
+	src.Set("baz", 3)
+
+	// Create destination map with some existing data
+	dst := New[string, int]()
+	dst.Set("qux", 4)
+	dst.Set("bar", 99) // This should be overwritten
+
+	initialVersion := dst.Version()
+
+	// Copy from src to dst
+	newVersion := dst.Copy(src)
+
+	// Verify version incremented
+	if newVersion != initialVersion+1 {
+		t.Errorf("Expected version %d, got %d", initialVersion+1, newVersion)
+	}
+
+	// Verify dst has all entries from src
+	if !dst.Has("foo") || !dst.Has("bar") || !dst.Has("baz") {
+		t.Error("Destination should have all keys from source")
+	}
+
+	val, _ := dst.Get("foo")
+	if val != 1 {
+		t.Errorf("Expected foo=1, got %d", val)
+	}
+
+	// Verify overwrite happened
+	val, _ = dst.Get("bar")
+	if val != 2 {
+		t.Errorf("Expected bar to be overwritten to 2, got %d", val)
+	}
+
+	// Verify dst still has its original entry
+	val, ok := dst.Get("qux")
+	if !ok || val != 4 {
+		t.Errorf("Expected qux=4 to remain, got %d (ok=%v)", val, ok)
+	}
+
+	// Verify total length
+	expectedLen := 4 // foo, bar, baz, qux
+	if dst.Len() != expectedLen {
+		t.Errorf("Expected destination to have %d entries, got %d", expectedLen, dst.Len())
+	}
+
+	// Test copying empty map
+	emptySrc := New[string, int]()
+	dst2 := New[string, int]()
+	dst2.Set("existing", 1)
+	dst2.Copy(emptySrc)
+	if !dst2.Has("existing") {
+		t.Error("Copying empty map should not remove existing entries")
+	}
+
+	// Test copying to empty map
+	src2 := New[string, int]()
+	src2.Set("alpha", 10)
+	src2.Set("beta", 20)
+	dst3 := New[string, int]()
+	dst3.Copy(src2)
+	if dst3.Len() != 2 {
+		t.Errorf("Expected 2 entries after copying to empty map, got %d", dst3.Len())
+	}
+}
+
+func TestCopyConcurrent(t *testing.T) {
+	// Test that Copy is safe with concurrent modifications
+	src := New[int, int]()
+	dst := New[int, int]()
+
+	// Populate source
+	for i := range 100 {
+		src.Set(i, i*2)
+	}
+
+	done := make(chan bool, 3)
+
+	// Goroutine 1: Copy from src to dst repeatedly
+	go func() {
+		for range 10 {
+			dst.Copy(src)
+		}
+		done <- true
+	}()
+
+	// Goroutine 2: Modify src concurrently
+	go func() {
+		for i := 100; i < 200; i++ {
+			src.Set(i, i*2)
+		}
+		done <- true
+	}()
+
+	// Goroutine 3: Read from dst concurrently
+	go func() {
+		for range 100 {
+			dst.Get(50)
+			_ = dst.Len()
+		}
+		done <- true
+	}()
+
+	// Wait for completion
+	for range 3 {
+		<-done
+	}
+
+	// Verify dst is still functional
+	dst.Set(999, 1998)
+	val, ok := dst.Get(999)
+	if !ok || val != 1998 {
+		t.Errorf("Map should be functional after concurrent Copy operations")
+	}
+}
+
+func TestTransferVsFromMap(t *testing.T) {
+	// Create identical source maps
+	map1 := map[string]int{"a": 1, "b": 2}
+	map2 := map[string]int{"a": 1, "b": 2}
+
+	// Transfer takes ownership
+	transferred := Transfer(map1)
+	// FromMap clones
+	cloned := FromMap(map2)
+
+	// Both should have same contents initially
+	if transferred.Len() != cloned.Len() {
+		t.Error("Transfer and FromMap should create maps with same initial length")
+	}
+
+	// Key difference: Transfer shares the underlying map (but you shouldn't use it)
+	// FromMap is independent
+	map2["c"] = 3 // This should NOT affect cloned
+	if cloned.Has("c") {
+		t.Error("FromMap should create independent map")
+	}
+
+	// We can't test Transfer's sharing behavior since using the original map
+	// after Transfer is documented as incorrect usage
+}
+
+func TestCloneVersionTracking(t *testing.T) {
+	m := New[string, int]()
+	v0 := m.Version()
+
+	m.Set("a", 1) // v1
+	m.Set("b", 2) // v2
+
+	clone := m.Clone()
+
+	// Clone should have same version
+	if clone.Version() != 2 {
+		t.Errorf("Clone should have version 2, got %d", clone.Version())
+	}
+
+	// Original modifications
+	m.Set("c", 3) // v3
+	if m.Version() != 3 {
+		t.Errorf("Original should have version 3, got %d", m.Version())
+	}
+
+	// Clone version should not change
+	if clone.Version() != 2 {
+		t.Errorf("Clone version should still be 2, got %d", clone.Version())
+	}
+
+	// Clone modifications
+	clone.Set("d", 4)
+	if clone.Version() != 3 {
+		t.Errorf("Clone should now have version 3 (2+1), got %d", clone.Version())
+	}
+
+	// Original should still be at 3
+	if m.Version() != 3 {
+		t.Errorf("Original should still be version 3, got %d", m.Version())
+	}
+
+	// Verify v0 is 0
+	if v0 != 0 {
+		t.Errorf("Initial version should be 0, got %d", v0)
+	}
+}
+
+// Example demonstrates basic usage of the concurrent safe Map
+// including creating, setting, getting, and iterating with All().
+// The whole point though would be do to these operations concurrently from multiple goroutines.
+func Example() {
+	// Create a new concurrent safe map
+	m := New[string, int]()
+
+	// Add some entries
+	m.Set("apple", 5)
+	m.Set("banana", 3)
+	m.Set("cherry", 8)
+
+	// Get a specific value
+	count, exists := m.Get("banana")
+	if exists {
+		fmt.Printf("Bananas: %d\n", count)
+	}
+
+	// Check the total count
+	fmt.Printf("Total items: %d\n", m.Len())
+
+	// Check if a key exists
+	fmt.Printf("Has apple: %t\n", m.Has("apple"))
+
+	// Iterate over all entries using range
+	// Note: We collect and sort for deterministic output in this example
+	var toDelete []string
+	// Using m.All you can't mutate the map during iteration (use AllSorted or collect changes first, or
+	// use KeysSnapshot or KeyValuesSnapshot first then mutate)
+	for fruit, count := range m.All() {
+		if count < 8 {
+			toDelete = append(toDelete, fruit)
+		}
+	}
+	m.Delete(toDelete...) // Delete multiple, after iteration
+	fmt.Printf("After removing items with count < 8, total items: %d\n", m.Len())
+
+	// Output:
+	// Bananas: 3
+	// Total items: 3
+	// Has apple: true
+	// After removing items with count < 8, total items: 1
+}
+
+// ExampleMap_AllSorted demonstrates using AllSorted with a custom struct
+// to iterate over entries in a specific order.
+func ExampleMap_AllSorted() {
+	// Define a custom struct with multiple fields
+	type Task struct {
+		Name     string
+		Priority int
+	}
+
+	// Create a map with Task keys
+	m := New[Task, string]()
+
+	// Add some tasks
+	m.Set(Task{Name: "Fix bug", Priority: 1}, "In Progress")
+	m.Set(Task{Name: "Write docs", Priority: 3}, "Not Started")
+	m.Set(Task{Name: "Review PR", Priority: 2}, "Completed")
+	m.Set(Task{Name: "Deploy", Priority: 1}, "Pending")
+
+	// Iterate in priority order (lowest priority number first)
+	// If priorities are equal, sort by name
+	fmt.Println("Tasks by priority:")
+	for task, status := range m.AllSorted(func(a, b Task) bool {
+		if a.Priority != b.Priority {
+			return a.Priority < b.Priority
+		}
+		return a.Name < b.Name
+	}) {
+		// Here it's ok to mutate during iteration:
+		if task.Priority == 1 {
+			m.Set(task, "Changed") // Update high priority tasks
+		}
+		newStatus, _ := m.Get(task)
+		fmt.Printf("  [P%d] %s: %s (current: %s)\n", task.Priority, task.Name, status, newStatus)
+	}
+
+	// Output:
+	// Tasks by priority:
+	//   [P1] Deploy: Pending (current: Changed)
+	//   [P1] Fix bug: In Progress (current: Changed)
+	//   [P2] Review PR: Completed (current: Completed)
+	//   [P3] Write docs: Not Started (current: Not Started)
+}
+
+// ExampleNaturalSort demonstrates sorting with naturally ordered types.
+func ExampleNaturalSort() {
+	// Create a map with ordered keys (strings, ints, etc.)
+	scores := New[string, int]()
+	scores.Set("Charlie", 85)
+	scores.Set("Alice", 92)
+	scores.Set("Bob", 78)
+
+	// Iterate in natural (alphabetical) order
+	fmt.Println("Scores (alphabetically):")
+	for name, score := range NaturalSort(scores) {
+		fmt.Printf("  %s: %d\n", name, score)
+	}
+
+	// Output:
+	// Scores (alphabetically):
+	//   Alice: 92
+	//   Bob: 78
+	//   Charlie: 85
 }

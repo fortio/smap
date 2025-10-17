@@ -8,6 +8,7 @@ package smap
 import (
 	"cmp"
 	"iter"
+	"maps"
 	"sort"
 	"sync"
 )
@@ -19,7 +20,7 @@ type Map[K comparable, V any] struct {
 	m       map[K]V
 }
 
-// KV is a key-value pair used for MultiSet (optional).
+// KV is a key-value pair used for SetBatch (optional).
 type KV[K comparable, V any] struct {
 	Key   K
 	Value V
@@ -50,8 +51,8 @@ func (s *Map[K, V]) Set(key K, value V) (newVersion uint64) {
 	return newVersion
 }
 
-// MultiSet sets multiple key-value pairs in a single lock/unlock batch (and returns the new version of the map).
-func (s *Map[K, V]) MultiSet(kvs []KV[K, V]) (newVersion uint64) {
+// SetBatch sets multiple key-value pairs in a single lock/unlock batch (and returns the new version of the map).
+func (s *Map[K, V]) SetBatch(kvs []KV[K, V]) (newVersion uint64) {
 	s.mu.Lock()
 	for _, kv := range kvs {
 		s.m[kv.Key] = kv.Value
@@ -112,9 +113,9 @@ func (s *Map[K, V]) Clear() (newVersion uint64) {
 // This allows ranging over the sync Map like a regular map using Go 1.24+ iterators.
 // The iteration takes a read lock for the duration of going over the entries.
 // If you wish to modify the map during iteration, you should postpone to after the loop
-// or use [AllSorted] or [NaturalSort] which are doing 2 phases and the 2nd phase is
+// or use [Map.AllSorted] or [NaturalSort] which are doing 2 phases and the 2nd phase is
 // without holding a lock. If using this one and wanting to mutate the map,
-// accumulate entries in a slice and call Delete(toDeleteSlice) or [MultiSet] for instance.
+// accumulate entries in a slice and call Delete(toDeleteSlice...) or [Map.SetBatch] for instance.
 func (s *Map[K, V]) All() iter.Seq2[K, V] {
 	return func(yield func(K, V) bool) {
 		s.mu.RLock()
@@ -129,7 +130,7 @@ func (s *Map[K, V]) All() iter.Seq2[K, V] {
 
 // Values returns an iterator over values from the map.
 // This allows ranging over just the values using Go 1.24+ iterators.
-// Like [All] this iterator takes a read lock for the duration of going over the entries.
+// Like [Map.All] this iterator takes a read lock for the duration of going over the entries.
 func (s *Map[K, V]) Values() iter.Seq[V] {
 	return func(yield func(V) bool) {
 		s.mu.RLock()
@@ -144,7 +145,7 @@ func (s *Map[K, V]) Values() iter.Seq[V] {
 
 // Keys returns an iterator over keys from the map.
 // This allows ranging over just the keys using Go 1.24+ iterators.
-// Like [All] this iterator takes a read lock for the duration of going over the entries.
+// Like [Map.All] this iterator takes a read lock for the duration of going over the entries.
 func (s *Map[K, V]) Keys() iter.Seq[K] {
 	return func(yield func(K) bool) {
 		s.mu.RLock()
@@ -157,21 +158,38 @@ func (s *Map[K, V]) Keys() iter.Seq[K] {
 	}
 }
 
+// KeysSnapshot returns a snapshot slice of the current keys in the map.
+// The snapshot is taken under a read lock.
+func (s *Map[K, V]) KeysSnapshot() []K {
+	s.mu.RLock()
+	keys := make([]K, 0, len(s.m))
+	for k := range s.m {
+		keys = append(keys, k)
+	}
+	s.mu.RUnlock()
+	return keys
+}
+
+// KeyValuesSnapshot returns a snapshot slice of the current key-value pairs in the map.
+// The snapshot is taken under a read lock.
+func (s *Map[K, V]) KeyValuesSnapshot() []KV[K, V] {
+	s.mu.RLock()
+	kvs := make([]KV[K, V], 0, len(s.m))
+	for k, v := range s.m {
+		kvs = append(kvs, KV[K, V]{Key: k, Value: v})
+	}
+	s.mu.RUnlock()
+	return kvs
+}
+
 // KeysSorted returns an iterator over keys sorted using the provided comparison function.
-// Unlike [Keys], the map snapshot occurs under a read lock, but then sorting happens without holding the lock.
+// Unlike [Map.Keys], the map snapshot occurs under a read lock, but then sorting happens without holding the lock.
 func (s *Map[K, V]) KeysSorted(less func(a, b K) bool) iter.Seq[K] {
 	return func(yield func(K) bool) {
-		s.mu.RLock()
-		keys := make([]K, 0, len(s.m))
-		for k := range s.m {
-			keys = append(keys, k)
-		}
-		s.mu.RUnlock()
-
+		keys := s.KeysSnapshot()
 		sort.Slice(keys, func(i, j int) bool {
 			return less(keys[i], keys[j])
 		})
-
 		for _, k := range keys {
 			if !yield(k) {
 				return
@@ -181,7 +199,7 @@ func (s *Map[K, V]) KeysSorted(less func(a, b K) bool) iter.Seq[K] {
 }
 
 // AllSorted returns an iterator over key-value pairs where keys are visited in the order defined by less.
-// Unlike [All] only the keys snapshot occurs under a read lock, then sorting and value lookups happen without
+// Unlike [Map.All] only the keys snapshot occurs under a read lock, then sorting and value lookups happen without
 // holding it. Because of that, by the time a key is revisited later, it may have been deleted;
 // such entries are skipped.
 func (s *Map[K, V]) AllSorted(less func(a, b K) bool) iter.Seq2[K, V] {
@@ -209,6 +227,50 @@ func (s *Map[K, V]) AllSorted(less func(a, b K) bool) iter.Seq2[K, V] {
 			}
 		}
 	}
+}
+
+// Transfer moves the input map into a new concurrent safe Map. You must not use the
+// input map after calling Transfer or it would defeat the concurrent safety.
+// In most case use [FromMap] instead to clone the input map and not take ownership of it.
+// Passing a nil map results in a Map with a nil underlying map which will not work.
+func Transfer[K comparable, V any](m map[K]V) *Map[K, V] {
+	return &Map[K, V]{
+		m: m,
+	}
+}
+
+// FromMap creates a new Map from the provided standard map by cloning its contents.
+// Passing a nil map results in a Map with a nil underlying map which will not work.
+func FromMap[K comparable, V any](m map[K]V) *Map[K, V] {
+	return &Map[K, V]{
+		m: maps.Clone(m),
+	}
+}
+
+// Clone creates a copy of the Map.
+func (s *Map[K, V]) Clone() *Map[K, V] {
+	s.mu.RLock()
+	clone := FromMap(s.m)
+	clone.version = s.version
+	s.mu.RUnlock()
+	return clone
+}
+
+// Copy copies all key/value pairs from src adding them to the current map.
+// When a key in src is already present in this map, the value will be overwritten
+// by the value associated with the key in src.
+// Read lock is acquired on src and write lock on this map during the operation.
+// The new version of the map is returned (previous + 1).
+// Because of this calling Copy in both directions between 2 maps would lead to a deadlock.
+func (s *Map[K, V]) Copy(src *Map[K, V]) (newVersion uint64) {
+	s.mu.Lock()
+	src.mu.RLock()
+	maps.Copy(s.m, src.m)
+	s.version++
+	newVersion = s.version
+	src.mu.RUnlock()
+	s.mu.Unlock()
+	return newVersion
 }
 
 // NaturalSort returns an iterator that visits key-value pairs in the natural order of Q (using <).
