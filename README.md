@@ -5,5 +5,6 @@
 
 # smap
 Concurrent Safe Generic golang map with optionally sorted iteration (provides go1.24 iterators).
+Zero dependencies.
 
 See https://pkg.go.dev/fortio.org/smap
