@@ -1,7 +1,7 @@
 // Package smap is a zero dependencies library that provides a generic, concurrent safe map
 // with go1.24 iterators including optionally ordered keys iteration.
 //
-// This was originally developed for [fortio.org/tsync](https://github.com/fortio/tsync#tsync)
+// This was originally developed for [fortio.org/tsync]
 // which uses and battle tests it including for race conditions (there aren't any!).
 package smap
 
@@ -21,13 +21,13 @@ type Map[K comparable, V any] struct {
 	m       map[K]V
 }
 
-// KV is a key-value pair used for SetBatch (optional).
+// KV is a key-value pair used for [Map.SetBatch] and returned by [Map.KeysValuesSnapshot] (optional).
 type KV[K comparable, V any] struct {
 	Key   K
 	Value V
 }
 
-// New creates a new sync Map.
+// New creates a new concurrent safe [Map].
 func New[K comparable, V any]() *Map[K, V] {
 	return &Map[K, V]{
 		m: make(map[K]V),
@@ -230,7 +230,7 @@ func (s *Map[K, V]) AllSorted(less func(a, b K) bool) iter.Seq2[K, V] {
 	}
 }
 
-// Transfer moves the input map into a new concurrent safe Map. You must not use the
+// Transfer moves the input map into a new concurrent safe [Map]. You must not use the
 // input map after calling Transfer or it would defeat the concurrent safety.
 // In most case use [FromMap] instead to clone the input map and not take ownership of it.
 // Passing a nil map results in a Map with a nil underlying map which will not work.
@@ -240,7 +240,7 @@ func Transfer[K comparable, V any](m map[K]V) *Map[K, V] {
 	}
 }
 
-// FromMap creates a new Map from the provided standard map by cloning its contents.
+// FromMap creates a new [Map] from the provided standard map by cloning its contents.
 // Passing a nil map results in a Map with a nil underlying map which will not work.
 func FromMap[K comparable, V any](m map[K]V) *Map[K, V] {
 	return &Map[K, V]{
