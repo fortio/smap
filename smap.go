@@ -1,4 +1,5 @@
-// Package smap provides concurrent safe map.
+// Package smap is a zero dependencies library that provides a generic, concurrent safe map
+// with go1.24 iterators including optionally ordered keys iteration.
 package smap
 
 import (
