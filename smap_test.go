@@ -1306,6 +1306,29 @@ func TestString(t *testing.T) {
 	}
 }
 
+func TestTransactionWithPanic(t *testing.T) {
+	m := New[string, int]()
+	m.Set("x", 1)
+	m.Set("y", 2)
+	oldVersion := m.Version()
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic from transaction")
+		}
+		if m.Version() != oldVersion+1 {
+			t.Errorf("Map version should have been incremented despite panic, expected %d, got %d", oldVersion+1, m.Version())
+		}
+	}()
+
+	v := m.Transaction(func(m map[string]int) {
+		m["z"] = 3
+		panic("test panic")
+	})
+
+	t.Fatal("Transaction should have panicked, but returned", v)
+}
+
 // Example demonstrates basic usage of the concurrent safe Map
 // including creating, setting, getting, and iterating with All().
 // The whole point though would be do to these operations concurrently from multiple goroutines.

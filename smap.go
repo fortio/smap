@@ -290,6 +290,16 @@ func (s *Map[K, V]) GoString() (debug string) {
 	return debug
 }
 
+// Transaction executes the provided function fn within a write lock, with access to the internal map.
+func (s *Map[K, V]) Transaction(fn func(m map[K]V)) (newVersion uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock() // in case fn panics. we also pre bump the version ahead of calling fn for same reason.
+	s.version++
+	newVersion = s.version
+	fn(s.m)
+	return newVersion
+}
+
 // NaturalSort returns an iterator that visits key-value pairs in the natural order of Q (using <).
 // This requires Q (K from the Map[Q, V]) to be an ordered type.
 func NaturalSort[Q cmp.Ordered, V any](s *Map[Q, V]) iter.Seq2[Q, V] {
